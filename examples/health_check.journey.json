@@ -1,0 +1,23 @@
+{
+  "schema_version": "journey_card/v1",
+  "id": "health_check",
+  "name": "Basic Health Check",
+  "description": "Verifies that the BEAM system is healthy by checking process count and memory.",
+  "execution": {
+    "type": "module_call",
+    "run": {
+      "module": "ScryJourney.Examples.HealthCheck",
+      "function": "run",
+      "args": [],
+      "timeout_ms": 5000
+    }
+  },
+  "checkpoints": [
+    {"id": "process_count", "path": "process_count", "assert": "integer_gte", "min": 1},
+    {"id": "memory_mb", "path": "memory_mb", "assert": "type_is", "expected": "float"},
+    {"id": "otp_release", "path": "otp_release", "assert": "non_empty_string"},
+    {"id": "elixir_version", "path": "elixir_version", "assert": "non_empty_string"},
+    {"id": "schedulers", "path": "schedulers", "assert": "integer_gte", "min": 1},
+    {"id": "node_name", "path": "node", "assert": "present"}
+  ]
+}
