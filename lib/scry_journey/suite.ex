@@ -33,23 +33,7 @@ defmodule ScryJourney.Suite do
     results =
       paths
       |> Enum.sort()
-      |> Enum.map(fn path ->
-        case ScryJourney.verify(path, opts) do
-          {:ok, report} ->
-            report
-
-          {:error, reason} ->
-            %{
-              card_id: Path.basename(path, ".journey.json"),
-              card_name: Path.basename(path),
-              pass: false,
-              status: "ERROR",
-              error: format_error(reason),
-              checkpoints: [],
-              checkpoint_counts: %{pass: 0, fail: 0}
-            }
-        end
-      end)
+      |> Enum.map(fn path -> run_one(path, opts) end)
 
     build_suite_report(results)
   end
@@ -73,14 +57,58 @@ defmodule ScryJourney.Suite do
     end
   end
 
-  @doc "Discover all .journey.json files in a directory, sorted alphabetically."
+  @doc "Discover all .journey.json and .journey.exs files in a directory, sorted alphabetically."
   @spec discover(String.t()) :: [String.t()]
   def discover(dir) do
-    pattern = Path.join(dir, "**/*.journey.json")
+    json = Path.join(dir, "**/*.journey.json") |> Path.wildcard()
+    exs = Path.join(dir, "**/*.journey.exs") |> Path.wildcard()
 
-    pattern
-    |> Path.wildcard()
-    |> Enum.sort()
+    (json ++ exs) |> Enum.sort()
+  end
+
+  defp run_one(path, opts) do
+    if String.ends_with?(path, ".journey.exs") do
+      run_script(path, opts)
+    else
+      run_card(path, opts)
+    end
+  end
+
+  defp run_card(path, opts) do
+    case ScryJourney.verify(path, opts) do
+      {:ok, report} ->
+        report
+
+      {:error, reason} ->
+        %{
+          card_id: Path.basename(path, ".journey.json"),
+          card_name: Path.basename(path),
+          pass: false,
+          status: "ERROR",
+          error: format_error(reason),
+          checkpoints: [],
+          checkpoint_counts: %{pass: 0, fail: 0}
+        }
+    end
+  end
+
+  defp run_script(path, opts) do
+    case ScryJourney.verify_script(path, opts) do
+      {:ok, report} ->
+        report
+
+      {:error, reason} ->
+        %{
+          id: Path.basename(path, ".journey.exs"),
+          name: Path.basename(path),
+          pass: false,
+          status: "ERROR",
+          error: format_error(reason),
+          steps: [],
+          step_counts: %{pass: 0, fail: 0, skipped: 0, error: 0},
+          check_counts: %{pass: 0, fail: 0}
+        }
+    end
   end
 
   defp build_suite_report(results) do
