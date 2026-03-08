@@ -144,12 +144,19 @@ defmodule ScryJourney.CardTest do
         %{"id" => "c7", "path" => "g", "assert" => "integer_gte", "min" => 10},
         %{"id" => "c8", "path" => "h", "assert" => "contains", "expected" => "foo"},
         %{"id" => "c9", "path" => "i", "assert" => "length_equals", "expected" => 3},
-        %{"id" => "c10", "path" => "j", "assert" => "type_is", "expected" => "string"}
+        %{"id" => "c10", "path" => "j", "assert" => "type_is", "expected" => "string"},
+        %{"id" => "c11", "path" => "k", "assert" => "not_equals", "expected" => 0},
+        %{"id" => "c12", "path" => "l", "assert" => "gte", "expected" => 5},
+        %{"id" => "c13", "path" => "m", "assert" => "lte", "expected" => 100},
+        %{"id" => "c14", "path" => "n", "assert" => "gt", "expected" => 0},
+        %{"id" => "c15", "path" => "o", "assert" => "lt", "expected" => 1000},
+        %{"id" => "c16", "path" => "p", "assert" => "matches", "expected" => "^ok"},
+        %{"id" => "c17", "path" => "q", "assert" => "has_key", "expected" => "name"}
       ]
 
       card = Map.put(@valid_card, "checkpoints", checkpoints)
       assert {:ok, normalized} = Card.normalize(card)
-      assert length(normalized.checkpoints) == 10
+      assert length(normalized.checkpoints) == 17
     end
   end
 

@@ -8,12 +8,19 @@ defmodule ScryJourney.Checkpoint do
   ## Supported Assertions
 
   - `equals` — value equals expected
+  - `not_equals` — value does not equal expected
   - `present` — value is not nil
   - `truthy` — value is not nil/false
   - `falsy` — value is nil or false
   - `contains` — string/list contains item
   - `one_of` — value is in allowed list
-  - `integer_gte` — value >= min
+  - `integer_gte` — integer value >= min
+  - `gte` — numeric value >= expected
+  - `lte` — numeric value <= expected
+  - `gt` — numeric value > expected
+  - `lt` — numeric value < expected
+  - `matches` — string matches regex pattern
+  - `has_key` — map contains key
   - `non_empty_string` — non-empty binary
   - `length_equals` — collection length matches
   - `type_is` — value type matches string name
@@ -60,6 +67,75 @@ defmodule ScryJourney.Checkpoint do
     if actual == expected,
       do: {"PASS", "equals"},
       else: {"FAIL", "expected #{inspect(expected)}, got #{inspect(actual)}"}
+  end
+
+  defp apply_assertion("not_equals", checkpoint, actual) do
+    expected = Map.get(checkpoint, :expected)
+
+    if actual != expected,
+      do: {"PASS", "not equals #{inspect(expected)}"},
+      else: {"FAIL", "expected not #{inspect(expected)}, got #{inspect(actual)}"}
+  end
+
+  defp apply_assertion("gte", checkpoint, actual) do
+    expected = Map.get(checkpoint, :expected)
+
+    if is_number(actual) and actual >= expected,
+      do: {"PASS", ">= #{expected}"},
+      else: {"FAIL", "expected >= #{expected}, got #{inspect(actual)}"}
+  end
+
+  defp apply_assertion("lte", checkpoint, actual) do
+    expected = Map.get(checkpoint, :expected)
+
+    if is_number(actual) and actual <= expected,
+      do: {"PASS", "<= #{expected}"},
+      else: {"FAIL", "expected <= #{expected}, got #{inspect(actual)}"}
+  end
+
+  defp apply_assertion("gt", checkpoint, actual) do
+    expected = Map.get(checkpoint, :expected)
+
+    if is_number(actual) and actual > expected,
+      do: {"PASS", "> #{expected}"},
+      else: {"FAIL", "expected > #{expected}, got #{inspect(actual)}"}
+  end
+
+  defp apply_assertion("lt", checkpoint, actual) do
+    expected = Map.get(checkpoint, :expected)
+
+    if is_number(actual) and actual < expected,
+      do: {"PASS", "< #{expected}"},
+      else: {"FAIL", "expected < #{expected}, got #{inspect(actual)}"}
+  end
+
+  defp apply_assertion("matches", checkpoint, actual) do
+    pattern = Map.get(checkpoint, :expected)
+
+    case Regex.compile(pattern) do
+      {:ok, regex} ->
+        if is_binary(actual) and Regex.match?(regex, actual),
+          do: {"PASS", "matches /#{pattern}/"},
+          else: {"FAIL", "expected to match /#{pattern}/, got #{inspect(actual)}"}
+
+      {:error, _} ->
+        {"FAIL", "invalid regex pattern: #{pattern}"}
+    end
+  end
+
+  defp apply_assertion("has_key", checkpoint, actual) do
+    key = Map.get(checkpoint, :expected)
+
+    cond do
+      is_map(actual) and (Map.has_key?(actual, key) or Map.has_key?(actual, safe_to_atom(key))) ->
+        {"PASS", "has key #{inspect(key)}"}
+
+      is_map(actual) ->
+        {"FAIL", "map missing key #{inspect(key)}"}
+
+      true ->
+        {"FAIL", "expected map with key #{inspect(key)}, got #{type_name(actual)}"}
+    end
   end
 
   defp apply_assertion("present", _checkpoint, actual) do

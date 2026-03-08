@@ -40,4 +40,17 @@ defmodule ScryJourney do
       {:ok, run(card, opts)}
     end
   end
+
+  @doc """
+  Run all journey cards in a directory and return an aggregate report.
+
+  Discovers all `.journey.json` files, runs each one, and produces
+  a summary with overall pass/fail status.
+
+      report = ScryJourney.run_suite("journeys/")
+      report.pass     # => true if all journeys pass
+      report.summary  # => %{total: 4, passed: 4, failed: 0, errors: 0}
+  """
+  @spec run_suite(String.t() | [String.t()], keyword()) :: map()
+  defdelegate run_suite(dir_or_paths, opts \\ []), to: ScryJourney.Suite, as: :run
 end

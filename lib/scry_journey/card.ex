@@ -25,7 +25,7 @@ defmodule ScryJourney.Card do
   @schema_version "journey_card/v1"
   @default_timeout_ms 5_000
 
-  @assertions ~w(non_empty_string equals one_of integer_gte contains truthy falsy present length_equals type_is)
+  @assertions ~w(non_empty_string equals not_equals one_of integer_gte gte lte gt lt contains truthy falsy present length_equals type_is matches has_key)
 
   @doc "Load a journey card from a JSON file path."
   @spec load(String.t()) :: {:ok, map()} | {:error, term()}
@@ -164,6 +164,54 @@ defmodule ScryJourney.Card do
     if map_has_key?(checkpoint, "expected"),
       do: {:ok, %{expected: fetch_value(checkpoint, "expected")}},
       else: {:error, "assert=equals requires expected"}
+  end
+
+  defp normalize_checkpoint_args("not_equals", checkpoint) do
+    if map_has_key?(checkpoint, "expected"),
+      do: {:ok, %{expected: fetch_value(checkpoint, "expected")}},
+      else: {:error, "assert=not_equals requires expected"}
+  end
+
+  defp normalize_checkpoint_args("matches", checkpoint) do
+    case fetch_value(checkpoint, "expected") do
+      pattern when is_binary(pattern) and pattern != "" -> {:ok, %{expected: pattern}}
+      _ -> {:error, "assert=matches requires string expected (regex pattern)"}
+    end
+  end
+
+  defp normalize_checkpoint_args("has_key", checkpoint) do
+    case fetch_value(checkpoint, "expected") do
+      key when is_binary(key) and key != "" -> {:ok, %{expected: key}}
+      _ -> {:error, "assert=has_key requires string expected (key name)"}
+    end
+  end
+
+  defp normalize_checkpoint_args("gte", checkpoint) do
+    case fetch_value(checkpoint, "expected") do
+      n when is_number(n) -> {:ok, %{expected: n}}
+      _ -> {:error, "assert=gte requires numeric expected"}
+    end
+  end
+
+  defp normalize_checkpoint_args("lte", checkpoint) do
+    case fetch_value(checkpoint, "expected") do
+      n when is_number(n) -> {:ok, %{expected: n}}
+      _ -> {:error, "assert=lte requires numeric expected"}
+    end
+  end
+
+  defp normalize_checkpoint_args("gt", checkpoint) do
+    case fetch_value(checkpoint, "expected") do
+      n when is_number(n) -> {:ok, %{expected: n}}
+      _ -> {:error, "assert=gt requires numeric expected"}
+    end
+  end
+
+  defp normalize_checkpoint_args("lt", checkpoint) do
+    case fetch_value(checkpoint, "expected") do
+      n when is_number(n) -> {:ok, %{expected: n}}
+      _ -> {:error, "assert=lt requires numeric expected"}
+    end
   end
 
   defp normalize_checkpoint_args("one_of", checkpoint) do

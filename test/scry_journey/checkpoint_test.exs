@@ -222,6 +222,123 @@ defmodule ScryJourney.CheckpointTest do
     end
   end
 
+  describe "evaluate/2 — not_equals" do
+    test "passes when value differs" do
+      checkpoint = %{id: "c1", path: "count", assert: "not_equals", expected: 3}
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{count: 5})
+    end
+
+    test "fails when value equals" do
+      checkpoint = %{id: "c1", path: "count", assert: "not_equals", expected: 3}
+      assert %{status: "FAIL"} = Checkpoint.evaluate(checkpoint, %{count: 3})
+    end
+  end
+
+  describe "evaluate/2 — gte" do
+    test "passes when value >= expected" do
+      checkpoint = %{id: "c1", path: "val", assert: "gte", expected: 5}
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{val: 5})
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{val: 10})
+    end
+
+    test "passes for float values" do
+      checkpoint = %{id: "c1", path: "val", assert: "gte", expected: 1.5}
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{val: 2.0})
+    end
+
+    test "fails when value < expected" do
+      checkpoint = %{id: "c1", path: "val", assert: "gte", expected: 5}
+      assert %{status: "FAIL"} = Checkpoint.evaluate(checkpoint, %{val: 3})
+    end
+
+    test "fails for non-number" do
+      checkpoint = %{id: "c1", path: "val", assert: "gte", expected: 5}
+      assert %{status: "FAIL"} = Checkpoint.evaluate(checkpoint, %{val: "five"})
+    end
+  end
+
+  describe "evaluate/2 — lte" do
+    test "passes when value <= expected" do
+      checkpoint = %{id: "c1", path: "val", assert: "lte", expected: 10}
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{val: 10})
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{val: 5})
+    end
+
+    test "fails when value > expected" do
+      checkpoint = %{id: "c1", path: "val", assert: "lte", expected: 10}
+      assert %{status: "FAIL"} = Checkpoint.evaluate(checkpoint, %{val: 15})
+    end
+  end
+
+  describe "evaluate/2 — gt" do
+    test "passes when value > expected" do
+      checkpoint = %{id: "c1", path: "val", assert: "gt", expected: 5}
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{val: 10})
+    end
+
+    test "fails when value equals expected" do
+      checkpoint = %{id: "c1", path: "val", assert: "gt", expected: 5}
+      assert %{status: "FAIL"} = Checkpoint.evaluate(checkpoint, %{val: 5})
+    end
+  end
+
+  describe "evaluate/2 — lt" do
+    test "passes when value < expected" do
+      checkpoint = %{id: "c1", path: "val", assert: "lt", expected: 10}
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{val: 5})
+    end
+
+    test "fails when value equals expected" do
+      checkpoint = %{id: "c1", path: "val", assert: "lt", expected: 10}
+      assert %{status: "FAIL"} = Checkpoint.evaluate(checkpoint, %{val: 10})
+    end
+  end
+
+  describe "evaluate/2 — matches" do
+    test "passes when string matches regex" do
+      checkpoint = %{id: "c1", path: "val", assert: "matches", expected: "^hello"}
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{val: "hello world"})
+    end
+
+    test "fails when string doesn't match" do
+      checkpoint = %{id: "c1", path: "val", assert: "matches", expected: "^hello"}
+      assert %{status: "FAIL"} = Checkpoint.evaluate(checkpoint, %{val: "world hello"})
+    end
+
+    test "fails for non-string value" do
+      checkpoint = %{id: "c1", path: "val", assert: "matches", expected: "\\d+"}
+      assert %{status: "FAIL"} = Checkpoint.evaluate(checkpoint, %{val: 42})
+    end
+
+    test "handles complex regex" do
+      checkpoint = %{id: "c1", path: "val", assert: "matches", expected: "^\\d{3}-\\d{4}$"}
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{val: "123-4567"})
+      assert %{status: "FAIL"} = Checkpoint.evaluate(checkpoint, %{val: "12-345"})
+    end
+  end
+
+  describe "evaluate/2 — has_key" do
+    test "passes when map has string key" do
+      checkpoint = %{id: "c1", path: "data", assert: "has_key", expected: "name"}
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{data: %{"name" => "Alice"}})
+    end
+
+    test "passes when map has atom key" do
+      checkpoint = %{id: "c1", path: "data", assert: "has_key", expected: "name"}
+      assert %{status: "PASS"} = Checkpoint.evaluate(checkpoint, %{data: %{name: "Alice"}})
+    end
+
+    test "fails when map missing key" do
+      checkpoint = %{id: "c1", path: "data", assert: "has_key", expected: "email"}
+      assert %{status: "FAIL"} = Checkpoint.evaluate(checkpoint, %{data: %{name: "Alice"}})
+    end
+
+    test "fails for non-map value" do
+      checkpoint = %{id: "c1", path: "data", assert: "has_key", expected: "name"}
+      assert %{status: "FAIL"} = Checkpoint.evaluate(checkpoint, %{data: "not a map"})
+    end
+  end
+
   describe "evaluate/2 return structure" do
     test "includes all expected fields" do
       checkpoint = %{id: "test_id", path: "value", assert: "present"}
