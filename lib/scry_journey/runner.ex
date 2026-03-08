@@ -96,24 +96,16 @@ defmodule ScryJourney.Runner do
   defp resolve_module(module_string) when is_binary(module_string) do
     module_atom =
       if String.starts_with?(module_string, "Elixir.") do
-        String.to_existing_atom(module_string)
+        String.to_atom(module_string)
       else
-        String.to_existing_atom("Elixir." <> module_string)
+        String.to_atom("Elixir." <> module_string)
       end
 
-    if Code.ensure_loaded?(module_atom) do
-      {:ok, module_atom}
-    else
-      {:error, "Module not loaded: #{module_string}"}
-    end
-  rescue
-    ArgumentError -> {:error, "Module not found: #{module_string}"}
+    {:ok, module_atom}
   end
 
   defp resolve_function(function_string) when is_binary(function_string) do
-    {:ok, String.to_existing_atom(function_string)}
-  rescue
-    ArgumentError -> {:error, "Function not found: #{function_string}"}
+    {:ok, String.to_atom(function_string)}
   end
 
   defp resolve_timeout(card, opts) do

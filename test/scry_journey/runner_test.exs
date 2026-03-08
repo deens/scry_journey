@@ -122,7 +122,7 @@ defmodule ScryJourney.RunnerTest do
       report = Runner.run(card, transport: :local)
       assert report.pass == false
       assert report.status == "ERROR"
-      assert report.error =~ "Module not found"
+      assert report.error =~ "NonExistent.Module"
     end
 
     test "report includes execution metadata" do
