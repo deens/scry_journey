@@ -220,6 +220,10 @@ defmodule ScryJourney.Checkpoint do
       else: {"FAIL", "expected type #{expected}, got #{actual_type}"}
   end
 
+  defp apply_assertion(unknown, _checkpoint, _actual) do
+    {"FAIL", "unknown assertion type: #{inspect(unknown)}"}
+  end
+
   # Path navigation helpers
 
   defp next_value(current, segment) when is_map(current) do
