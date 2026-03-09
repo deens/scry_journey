@@ -413,4 +413,300 @@ defmodule ScryJourney.PrismQueryTest do
       assert health.complete == false
     end
   end
+
+  # ──────────────────────────────────────────────
+  # Temporal queries
+  # ──────────────────────────────────────────────
+
+  defp temporal_snapshot do
+    %{
+      nodes: [],
+      edges: [],
+      events: [
+        %{
+          id: "e1",
+          kind: "journey_started",
+          at_ms: 1000,
+          trace_id: "journey:t1",
+          group: "journey",
+          stage: "init",
+          summary: "Started"
+        },
+        %{
+          id: "e2",
+          kind: "step_started",
+          at_ms: 1010,
+          trace_id: "journey:t1",
+          group: "journey",
+          stage: "step_start",
+          summary: "Step A"
+        },
+        %{
+          id: "e3",
+          kind: "step_completed",
+          at_ms: 1050,
+          trace_id: "journey:t1",
+          group: "journey",
+          stage: "step_complete",
+          summary: "Step A done"
+        },
+        %{
+          id: "e4",
+          kind: "step_started",
+          at_ms: 1060,
+          trace_id: "journey:t1",
+          group: "journey",
+          stage: "step_start",
+          summary: "Step B"
+        },
+        %{
+          id: "e5",
+          kind: "step_completed",
+          at_ms: 1200,
+          trace_id: "journey:t1",
+          group: "journey",
+          stage: "step_complete",
+          summary: "Step B done"
+        },
+        %{
+          id: "e6",
+          kind: "journey_completed",
+          at_ms: 1210,
+          trace_id: "journey:t1",
+          group: "journey",
+          stage: "complete",
+          summary: "Done"
+        },
+        # Different trace
+        %{id: "e7", kind: "other_event", at_ms: 1100, trace_id: "other", group: "system"}
+      ]
+    }
+  end
+
+  describe "event_sequence/2" do
+    test "returns events in timestamp order" do
+      seq = PrismQuery.event_sequence(temporal_snapshot(), "journey:t1")
+
+      assert length(seq) == 6
+      assert hd(seq).kind == "journey_started"
+      assert List.last(seq).kind == "journey_completed"
+
+      # Verify monotonic timestamps
+      timestamps = Enum.map(seq, & &1.at_ms)
+      assert timestamps == Enum.sort(timestamps)
+    end
+
+    test "returns empty for unknown trace" do
+      assert PrismQuery.event_sequence(temporal_snapshot(), "unknown") == []
+    end
+  end
+
+  describe "events_ordered?/3" do
+    test "returns true for correct order" do
+      assert PrismQuery.events_ordered?(temporal_snapshot(), "journey:t1", [
+               "journey_started",
+               "step_started",
+               "step_completed",
+               "journey_completed"
+             ])
+    end
+
+    test "returns true for subsequence" do
+      assert PrismQuery.events_ordered?(temporal_snapshot(), "journey:t1", [
+               "journey_started",
+               "journey_completed"
+             ])
+    end
+
+    test "returns false for wrong order" do
+      refute PrismQuery.events_ordered?(temporal_snapshot(), "journey:t1", [
+               "journey_completed",
+               "journey_started"
+             ])
+    end
+
+    test "returns true for empty expected list" do
+      assert PrismQuery.events_ordered?(temporal_snapshot(), "journey:t1", [])
+    end
+
+    test "returns false when expected event is missing" do
+      refute PrismQuery.events_ordered?(temporal_snapshot(), "journey:t1", [
+               "journey_started",
+               "nonexistent_event"
+             ])
+    end
+  end
+
+  describe "events_within_ms?/3" do
+    test "returns true when within window" do
+      {result, span} = PrismQuery.events_within_ms?(temporal_snapshot(), "journey:t1", 500)
+      assert result == true
+      # 1210 - 1000
+      assert span == 210
+    end
+
+    test "returns false when exceeding window" do
+      {result, span} = PrismQuery.events_within_ms?(temporal_snapshot(), "journey:t1", 100)
+      assert result == false
+      assert span == 210
+    end
+
+    test "returns true for empty trace" do
+      {result, span} = PrismQuery.events_within_ms?(temporal_snapshot(), "unknown", 10)
+      assert result == true
+      assert span == 0
+    end
+  end
+
+  describe "journey_timing/2" do
+    test "computes timing summary" do
+      timing = PrismQuery.journey_timing(temporal_snapshot(), "t1")
+
+      assert timing.total_ms == 210
+      assert timing.event_count == 6
+      assert timing.first_event == "journey_started"
+      assert timing.last_event == "journey_completed"
+
+      assert timing.sequence == [
+               "journey_started",
+               "step_started",
+               "step_completed",
+               "step_started",
+               "step_completed",
+               "journey_completed"
+             ]
+    end
+
+    test "returns zeros for nonexistent journey" do
+      timing = PrismQuery.journey_timing(empty_snapshot(), "nope")
+
+      assert timing.total_ms == 0
+      assert timing.event_count == 0
+      assert timing.first_event == nil
+      assert timing.last_event == nil
+    end
+  end
+
+  # ──────────────────────────────────────────────
+  # Process queries
+  # ──────────────────────────────────────────────
+
+  defp process_snapshot do
+    %{
+      nodes: [
+        %{
+          id: "sup:Dominoes.Runtime.MatchSupervisor",
+          type: :supervisor,
+          lane: :app,
+          label: "Dominoes.Runtime.MatchSupervisor",
+          status: :online,
+          meta: %{application: "dominoes", pid: "#PID<0.500.0>"}
+        },
+        %{
+          id: "worker:Dominoes.Runtime.MatchServer_abc",
+          type: :worker,
+          lane: :app,
+          label: "MatchServer (abc)",
+          status: :online,
+          meta: %{
+            application: "dominoes",
+            pid: "#PID<0.501.0>",
+            initial_call: "Dominoes.Runtime.MatchServer.init/1",
+            registered_name: nil
+          }
+        },
+        %{
+          id: "sup:Phoenix.PubSub",
+          type: :supervisor,
+          lane: :app,
+          label: "Phoenix.PubSub",
+          status: :online,
+          meta: %{application: "phoenix_pubsub", pid: "#PID<0.200.0>"}
+        },
+        %{
+          id: "worker:Prism.Server",
+          type: :worker,
+          lane: :app,
+          label: "Prism.Server",
+          status: :online,
+          meta: %{application: "prism", pid: "#PID<0.300.0>"}
+        },
+        # Journey node — should NOT match process queries
+        %{
+          id: "journey:test",
+          type: :journey,
+          lane: :work,
+          label: "Test Journey",
+          status: :online,
+          meta: %{journey_id: "test"}
+        }
+      ],
+      edges: [],
+      events: []
+    }
+  end
+
+  describe "find_process/2" do
+    test "finds process by label substring" do
+      procs = PrismQuery.find_process(process_snapshot(), "MatchServer")
+      assert length(procs) == 1
+      assert hd(procs).id == "worker:Dominoes.Runtime.MatchServer_abc"
+    end
+
+    test "finds process by initial_call" do
+      procs = PrismQuery.find_process(process_snapshot(), "MatchServer.init")
+      assert length(procs) == 1
+    end
+
+    test "case-insensitive matching" do
+      procs = PrismQuery.find_process(process_snapshot(), "matchserver")
+      assert length(procs) == 1
+    end
+
+    test "does not match journey nodes" do
+      procs = PrismQuery.find_process(process_snapshot(), "Test Journey")
+      assert procs == []
+    end
+
+    test "returns empty for no match" do
+      assert PrismQuery.find_process(process_snapshot(), "NonExistent") == []
+    end
+  end
+
+  describe "processes_for_app/2" do
+    test "finds processes for an application" do
+      procs = PrismQuery.processes_for_app(process_snapshot(), "dominoes")
+      # supervisor + worker
+      assert length(procs) == 2
+    end
+
+    test "accepts atom app name" do
+      procs = PrismQuery.processes_for_app(process_snapshot(), :prism)
+      assert length(procs) == 1
+      assert hd(procs).label == "Prism.Server"
+    end
+
+    test "returns empty for unknown app" do
+      assert PrismQuery.processes_for_app(process_snapshot(), "unknown") == []
+    end
+  end
+
+  describe "app_health/2" do
+    test "computes health summary" do
+      health = PrismQuery.app_health(process_snapshot(), "dominoes")
+
+      assert health.total == 2
+      assert health.online == 2
+      assert health.error == 0
+      assert health.supervisors == 1
+      assert health.workers == 1
+    end
+
+    test "returns zeros for unknown app" do
+      health = PrismQuery.app_health(process_snapshot(), "unknown")
+
+      assert health.total == 0
+      assert health.online == 0
+    end
+  end
 end

@@ -205,6 +205,203 @@ defmodule ScryJourney.PrismQuery do
   end
 
   # ──────────────────────────────────────────────
+  # Temporal queries
+  # ──────────────────────────────────────────────
+
+  @doc """
+  Extract the event sequence for a trace, ordered by timestamp.
+
+  Returns a list of `%{kind: ..., at_ms: ..., summary: ...}` maps,
+  oldest first. Useful for verifying execution order.
+  """
+  @spec event_sequence(map(), String.t()) :: [map()]
+  def event_sequence(snapshot, trace_id) do
+    snapshot
+    |> events_by_trace(trace_id)
+    |> Enum.sort_by(&(&1[:at_ms] || 0))
+    |> Enum.map(fn event ->
+      %{
+        kind: event[:kind],
+        at_ms: event[:at_ms],
+        summary: event[:summary],
+        stage: event[:stage]
+      }
+    end)
+  end
+
+  @doc """
+  Check whether events in a trace appear in the expected order.
+
+  Takes a list of event kind strings and returns true if they appear
+  in that relative order in the timeline (not necessarily consecutively).
+
+      events_ordered?(snapshot, "journey:test", ["journey_started", "step_started", "step_completed"])
+  """
+  @spec events_ordered?(map(), String.t(), [String.t()]) :: boolean()
+  def events_ordered?(snapshot, trace_id, expected_kinds) do
+    actual_kinds =
+      snapshot
+      |> event_sequence(trace_id)
+      |> Enum.map(& &1.kind)
+
+    subsequence?(actual_kinds, expected_kinds)
+  end
+
+  @doc """
+  Check whether all events in a trace occurred within a time window.
+
+  Returns `{true, span_ms}` if the span between first and last event
+  is <= max_ms, or `{false, span_ms}` if it exceeds the limit.
+  Returns `{true, 0}` for empty or single-event traces.
+  """
+  @spec events_within_ms?(map(), String.t(), non_neg_integer()) :: {boolean(), non_neg_integer()}
+  def events_within_ms?(snapshot, trace_id, max_ms) do
+    timestamps =
+      snapshot
+      |> events_by_trace(trace_id)
+      |> Enum.map(& &1[:at_ms])
+      |> Enum.reject(&is_nil/1)
+
+    case {Enum.min(timestamps, fn -> nil end), Enum.max(timestamps, fn -> nil end)} do
+      {nil, _} ->
+        {true, 0}
+
+      {_, nil} ->
+        {true, 0}
+
+      {min_t, max_t} ->
+        span = max_t - min_t
+        {span <= max_ms, span}
+    end
+  end
+
+  @doc """
+  Build a temporal summary for a journey trace.
+
+  Returns timing data useful for assertions:
+
+      %{
+        total_ms: 245,
+        event_count: 8,
+        first_event: "journey_started",
+        last_event: "journey_completed",
+        step_durations: %{"step_a" => 12, "step_b" => 45}
+      }
+  """
+  @spec journey_timing(map(), String.t()) :: map()
+  def journey_timing(snapshot, journey_id) do
+    trace_id = "journey:#{journey_id}"
+    sequence = event_sequence(snapshot, trace_id)
+
+    timestamps = Enum.map(sequence, & &1.at_ms) |> Enum.reject(&is_nil/1)
+
+    total_ms =
+      case {List.first(timestamps), List.last(timestamps)} do
+        {nil, _} -> 0
+        {first, last} -> last - first
+      end
+
+    # Extract per-step durations from step_completed events
+    step_durations =
+      snapshot
+      |> events_by_trace(trace_id)
+      |> Enum.filter(&(&1[:kind] == "step_completed"))
+      |> Map.new(fn event ->
+        step_id = event[:details][:step_id] || event[:to]
+        duration = event[:details][:duration_ms]
+        {step_id, duration}
+      end)
+      |> Enum.reject(fn {_, v} -> is_nil(v) end)
+      |> Map.new()
+
+    %{
+      total_ms: total_ms,
+      event_count: length(sequence),
+      first_event: sequence |> List.first() |> get_kind(),
+      last_event: sequence |> List.last() |> get_kind(),
+      step_durations: step_durations,
+      sequence: Enum.map(sequence, & &1.kind)
+    }
+  end
+
+  # ──────────────────────────────────────────────
+  # Process queries (app-aware verification)
+  # ──────────────────────────────────────────────
+
+  @doc """
+  Find process nodes by registered name or label pattern.
+
+  Searches node labels and meta for a match. Useful for verifying
+  that a specific GenServer or Supervisor exists in the graph.
+
+      find_process(snapshot, "MatchServer")
+      find_process(snapshot, "Dominoes.Runtime")
+  """
+  @spec find_process(map(), String.t()) :: [map()]
+  def find_process(snapshot, name_pattern) do
+    snapshot
+    |> nodes()
+    |> Enum.filter(fn node ->
+      type = to_string(node.type)
+
+      (type == "supervisor" or type == "worker") and
+        matches_process?(node, name_pattern)
+    end)
+  end
+
+  @doc """
+  Find all process nodes belonging to a specific OTP application.
+
+      processes_for_app(snapshot, "dominoes")
+      processes_for_app(snapshot, :dominoes)
+  """
+  @spec processes_for_app(map(), atom() | String.t()) :: [map()]
+  def processes_for_app(snapshot, app) do
+    app_str = to_string(app)
+
+    snapshot
+    |> nodes()
+    |> Enum.filter(fn node ->
+      type = to_string(node.type)
+
+      (type == "supervisor" or type == "worker") and
+        to_string(meta_get(Map.get(node, :meta, %{}), :application)) == app_str
+    end)
+  end
+
+  @doc """
+  Get a process health summary for an OTP application.
+
+      app_health(snapshot, "dominoes")
+      # => %{total: 12, online: 10, error: 1, warn: 1, supervisors: 3, workers: 9}
+  """
+  @spec app_health(map(), atom() | String.t()) :: map()
+  def app_health(snapshot, app) do
+    procs = processes_for_app(snapshot, app)
+
+    status_counts =
+      Enum.reduce(procs, %{}, fn node, acc ->
+        Map.update(acc, node.status, 1, &(&1 + 1))
+      end)
+
+    type_counts =
+      Enum.reduce(procs, %{supervisors: 0, workers: 0}, fn node, acc ->
+        case to_string(node.type) do
+          "supervisor" -> %{acc | supervisors: acc.supervisors + 1}
+          _ -> %{acc | workers: acc.workers + 1}
+        end
+      end)
+
+    Map.merge(type_counts, %{
+      total: length(procs),
+      online: Map.get(status_counts, :online, 0),
+      error: Map.get(status_counts, :error, 0),
+      warn: Map.get(status_counts, :warn, 0),
+      critical: Map.get(status_counts, :critical, 0)
+    })
+  end
+
+  # ──────────────────────────────────────────────
   # Helpers
   # ──────────────────────────────────────────────
 
@@ -253,5 +450,40 @@ defmodule ScryJourney.PrismQuery do
     String.to_existing_atom(str)
   rescue
     _ -> nil
+  end
+
+  # Check if a list contains a subsequence in order (not necessarily contiguous)
+  defp subsequence?(_, []), do: true
+  defp subsequence?([], _), do: false
+
+  defp subsequence?([h | rest_actual], [h | rest_expected]) do
+    subsequence?(rest_actual, rest_expected)
+  end
+
+  defp subsequence?([_ | rest_actual], expected) do
+    subsequence?(rest_actual, expected)
+  end
+
+  defp get_kind(nil), do: nil
+  defp get_kind(event), do: event.kind
+
+  # Check if a process node matches a name pattern (case-insensitive substring)
+  defp matches_process?(node, pattern) do
+    pattern_down = String.downcase(pattern)
+    label = String.downcase(to_string(node.label))
+    id = String.downcase(to_string(node.id))
+    meta = Map.get(node, :meta, %{})
+
+    String.contains?(label, pattern_down) or
+      String.contains?(id, pattern_down) or
+      meta_contains?(meta, :initial_call, pattern_down) or
+      meta_contains?(meta, :registered_name, pattern_down)
+  end
+
+  defp meta_contains?(meta, key, pattern) do
+    case meta_get(meta, key) do
+      nil -> false
+      value -> String.contains?(String.downcase(to_string(value)), pattern)
+    end
   end
 end
