@@ -196,4 +196,31 @@ defmodule ScryJourney do
   """
   @spec run_suite(String.t() | [String.t()], keyword()) :: map()
   defdelegate run_suite(dir_or_paths, opts \\ []), to: ScryJourney.Suite, as: :run
+
+  # -- Watch Suite (continuous mode for all journeys) --
+
+  @doc """
+  Start watchers for all journey scripts in a directory.
+
+  Returns `{:ok, supervisor_pid}` for a ModeSupervisor that manages
+  individual Mode watchers for each `.journey.exs` file found.
+
+  ## Options
+
+  - `:interval` — ms between runs (default 30_000)
+  - `:emitter` — shared event emitter (auto-wires Prism if available)
+  - `:props_mode` — `:fixed`, `:random`, or `:rotate` (default `:fixed`)
+  - `:name` — GenServer name for the supervisor
+
+  ## Example
+
+      {:ok, sup} = ScryJourney.watch_suite("journeys/", interval: 60_000)
+      ScryJourney.ModeSupervisor.health(sup)
+      ScryJourney.ModeSupervisor.stop(sup)
+  """
+  @spec watch_suite(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
+  def watch_suite(directory, opts \\ []) do
+    opts = Keyword.put(opts, :directory, directory)
+    ScryJourney.ModeSupervisor.start_link(opts)
+  end
 end
