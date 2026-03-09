@@ -68,6 +68,33 @@ defmodule ScryJourney.EventEmitter do
   end
 
   @doc """
+  Create a Prism emitter that feeds journey events into Prism's graph.
+
+  Auto-detects whether Prism is available. Returns a noop if Prism is not loaded.
+  When Prism is running, journey events appear as nodes, edges, and timeline
+  events in the Prism visualization.
+
+  ## Examples
+
+      emitter = EventEmitter.prism()
+      ScryJourney.run_script(script, emitter: emitter)
+  """
+  @spec prism() :: emitter()
+  def prism do
+    if prism_available?() do
+      apply(Prism, :journey_emitter, [])
+    else
+      noop()
+    end
+  end
+
+  @doc "Check if Prism is loaded and has journey_emitter/0."
+  @spec prism_available?() :: boolean()
+  def prism_available? do
+    Code.ensure_loaded?(Prism) and function_exported?(Prism, :journey_emitter, 0)
+  end
+
+  @doc """
   Create a collector emitter that stores events in the calling process mailbox.
 
   Use `collect/1` to retrieve stored events. Useful for testing and recording.

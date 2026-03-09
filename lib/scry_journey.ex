@@ -63,7 +63,7 @@ defmodule ScryJourney do
   @spec verify_script(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def verify_script(path, opts \\ []) do
     with {:ok, script} <- load_script(path) do
-      opts = maybe_add_recording_emitter(opts)
+      opts = opts |> maybe_add_prism_emitter() |> maybe_add_recording_emitter()
       report = run_script(script, opts)
       maybe_save_recording(opts)
       {:ok, report}
@@ -74,10 +74,22 @@ defmodule ScryJourney do
   @spec run_inline(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run_inline(args, opts \\ []) do
     with {:ok, script} <- ScryJourney.Script.from_inline(args) do
-      opts = maybe_add_recording_emitter(opts)
+      opts = opts |> maybe_add_prism_emitter() |> maybe_add_recording_emitter()
       report = run_script(script, opts)
       maybe_save_recording(opts)
       {:ok, report}
+    end
+  end
+
+  defp maybe_add_prism_emitter(opts) do
+    if Keyword.has_key?(opts, :emitter) do
+      opts
+    else
+      if ScryJourney.EventEmitter.prism_available?() do
+        Keyword.put(opts, :emitter, ScryJourney.EventEmitter.prism())
+      else
+        opts
+      end
     end
   end
 
