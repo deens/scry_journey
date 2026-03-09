@@ -23,7 +23,8 @@ defmodule ScryJourney.RunnerV2 do
     ReportV2,
     EventEmitter,
     TelemetryCollector,
-    Observer
+    Observer,
+    Props
   }
 
   require Logger
@@ -41,6 +42,7 @@ defmodule ScryJourney.RunnerV2 do
   ## Options
 
   - `:emitter` — event emission function, see `ScryJourney.EventEmitter`
+  - `:props` — map of prop overrides, see `ScryJourney.Props`
   - `:default_step_timeout` — default per-step timeout in ms
   """
   @spec run(map(), keyword()) :: map()
@@ -48,8 +50,21 @@ defmodule ScryJourney.RunnerV2 do
     script_timeout = clamp_timeout(script[:timeout_ms] || @default_script_timeout)
     emit = Keyword.get(opts, :emitter, EventEmitter.noop())
     journey_id = script[:id] || "journey_#{System.unique_integer([:positive])}"
+    prop_overrides = Keyword.get(opts, :props, %{})
     opts = Keyword.put(opts, :journey_id, journey_id)
 
+    # Resolve props from script declarations + overrides
+    case Props.resolve(script, prop_overrides) do
+      {:ok, props} ->
+        opts = Keyword.put(opts, :props, props)
+        run_with_props(script, opts, emit, script_timeout, journey_id)
+
+      {:error, reason} ->
+        ReportV2.build_error(script, "Props error: #{reason}")
+    end
+  end
+
+  defp run_with_props(script, opts, emit, script_timeout, journey_id) do
     emit.(:journey_started, EventEmitter.journey_started(journey_id, script))
 
     task = Task.async(fn -> execute_all(script, opts, emit) end)
@@ -104,7 +119,14 @@ defmodule ScryJourney.RunnerV2 do
   end
 
   defp execute_steps(script, opts, emit) do
-    Enum.reduce_while(script.steps, {Context.new(), []}, fn step, {ctx, reports} ->
+    # Seed context with resolved props
+    initial_ctx =
+      case Keyword.get(opts, :props, %{}) do
+        props when props == %{} -> Context.new()
+        props -> Context.merge(Context.new(), %{props: props})
+      end
+
+    Enum.reduce_while(script.steps, {initial_ctx, []}, fn step, {ctx, reports} ->
       case execute_step(step, ctx, opts, emit) do
         {:ok, new_ctx, report} ->
           if report.status == "PASS" do
