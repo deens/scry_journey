@@ -126,6 +126,62 @@ defmodule ScryJourney do
     end
   end
 
+  # -- Mode (continuous execution) --
+
+  @doc """
+  Start a journey mode watcher that runs a script on a schedule.
+
+  Returns `{:ok, pid}` for the mode GenServer.
+
+  ## Options
+
+  - `:interval` — ms between runs (default 30_000)
+  - `:emitter` — event emitter (auto-wires Prism if available)
+  - `:props` — prop overrides
+  - `:props_mode` — `:fixed`, `:random`, or `:rotate`
+  - `:name` — GenServer name for the watcher
+
+  ## Example
+
+      {:ok, watcher} = ScryJourney.watch("journeys/health.journey.exs", interval: 60_000)
+      ScryJourney.Mode.status(watcher)
+      ScryJourney.Mode.stop(watcher)
+  """
+  @spec watch(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
+  def watch(path, opts \\ []) do
+    with {:ok, script} <- load_script(path) do
+      opts =
+        opts
+        |> Keyword.put_new_lazy(:emitter, fn ->
+          if ScryJourney.EventEmitter.prism_available?() do
+            ScryJourney.EventEmitter.prism()
+          else
+            ScryJourney.EventEmitter.noop()
+          end
+        end)
+        |> Keyword.put(:script, script)
+
+      ScryJourney.Mode.start_link(opts)
+    end
+  end
+
+  @doc """
+  Run a journey script with all prop combinations and return results.
+
+  Useful for testing a journey against its full parameter space.
+  Returns a list of `{props, report}` tuples.
+  """
+  @spec run_matrix(map(), keyword()) :: [{map(), map()}]
+  def run_matrix(script, opts \\ []) do
+    combos = ScryJourney.Props.expand(script)
+    opts = maybe_add_prism_emitter(opts)
+
+    Enum.map(combos, fn props ->
+      report = run_script(script, Keyword.put(opts, :props, props))
+      {props, report}
+    end)
+  end
+
   # -- Suite (both formats) --
 
   @doc """

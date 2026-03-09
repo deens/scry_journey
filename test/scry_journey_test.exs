@@ -38,4 +38,81 @@ defmodule ScryJourneyTest do
       assert is_boolean(report.pass)
     end
   end
+
+  describe "run_matrix/2" do
+    test "runs all prop combinations and returns results" do
+      script = %{
+        id: "matrix_test",
+        props: %{
+          x: %{type: :integer, values: [1, 2]},
+          y: %{type: :atom, values: [:a, :b]}
+        },
+        steps: [
+          %{
+            id: "s1",
+            run: fn ctx -> %{sum: ctx.props.x, label: ctx.props.y} end,
+            checks: [%{id: "c1", path: "sum", assert: "gte", expected: 1}]
+          }
+        ]
+      }
+
+      results = ScryJourney.run_matrix(script)
+
+      assert length(results) == 4
+
+      # All should pass
+      assert Enum.all?(results, fn {_props, report} -> report.pass end)
+
+      # Should cover all combinations
+      prop_sets = Enum.map(results, fn {props, _report} -> props end)
+      assert %{x: 1, y: :a} in prop_sets
+      assert %{x: 1, y: :b} in prop_sets
+      assert %{x: 2, y: :a} in prop_sets
+      assert %{x: 2, y: :b} in prop_sets
+    end
+
+    test "returns single result for script without props" do
+      script = %{
+        id: "no_props",
+        steps: [
+          %{
+            id: "s1",
+            run: fn _ctx -> %{ok: true} end,
+            checks: [%{id: "c1", path: "ok", assert: "truthy"}]
+          }
+        ]
+      }
+
+      results = ScryJourney.run_matrix(script)
+      assert length(results) == 1
+      [{props, report}] = results
+      assert props == %{}
+      assert report.pass
+    end
+  end
+
+  describe "run_inline/2" do
+    test "returns structured report from inline args" do
+      # Inline mode uses string keys (from MCP JSON) and code strings.
+      # Code strings require Scry.Evaluator, which may not be available,
+      # so we just verify the pipeline runs and returns a valid report.
+      args = %{
+        "id" => "inline_test",
+        "steps" => [
+          %{
+            "id" => "s1",
+            "code" => "%{value: 42}",
+            "checks" => [
+              %{"id" => "c1", "path" => "value", "assert" => "equals", "expected" => 42}
+            ]
+          }
+        ]
+      }
+
+      assert {:ok, report} = ScryJourney.run_inline(args)
+      assert report.id == "inline_test"
+      assert report.schema_version == "journey_script/v2"
+      assert is_list(report.steps)
+    end
+  end
 end

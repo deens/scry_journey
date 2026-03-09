@@ -1,7 +1,7 @@
 defmodule ScryJourney.ModeTest do
   use ExUnit.Case, async: true
 
-  alias ScryJourney.{Mode, EventEmitter}
+  alias ScryJourney.Mode
 
   # ──────────────────────────────────────────────
   # Fixtures
