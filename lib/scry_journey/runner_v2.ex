@@ -16,7 +16,15 @@ defmodule ScryJourney.RunnerV2 do
       events = ScryJourney.EventEmitter.collect()
   """
 
-  alias ScryJourney.{Context, Step, Checkpoint, ReportV2, EventEmitter, TelemetryCollector}
+  alias ScryJourney.{
+    Context,
+    Step,
+    Checkpoint,
+    ReportV2,
+    EventEmitter,
+    TelemetryCollector,
+    Observer
+  }
 
   require Logger
 
@@ -114,23 +122,19 @@ defmodule ScryJourney.RunnerV2 do
 
     emit.(:step_started, EventEmitter.step_started(journey_id, step))
 
-    # If step has telemetry prefixes, wrap execution in a telemetry collector
-    {step_result, telemetry_data} = execute_with_telemetry(step, ctx, step_timeout)
+    # Wrap execution with telemetry collector and runtime observer
+    {step_result, telemetry_data, observations} =
+      execute_with_capture(step, ctx, step_timeout)
 
     case step_result do
       {:ok, result} ->
-        # Merge telemetry data into result if any events were captured
-        result_with_telemetry =
-          if telemetry_data.count > 0 do
-            case result do
-              r when is_map(r) -> Map.put(r, :telemetry, telemetry_data)
-              _ -> %{result: result, telemetry: telemetry_data}
-            end
-          else
-            result
-          end
+        # Merge telemetry and observations into result
+        enriched =
+          result
+          |> maybe_merge_telemetry(telemetry_data)
+          |> maybe_merge_observations(observations)
 
-        new_ctx = Context.merge(ctx, result_with_telemetry)
+        new_ctx = Context.merge(ctx, enriched)
 
         # Run await if present
         await_result = run_await(step, new_ctx, journey_id, emit)
@@ -164,6 +168,24 @@ defmodule ScryJourney.RunnerV2 do
     end
   end
 
+  # Execute step with optional telemetry collection and runtime observation.
+  # Returns {step_result, telemetry_data, observations}.
+  defp execute_with_capture(step, ctx, timeout) do
+    observe_opts = Map.get(step, :observe)
+
+    run_fn = fn ->
+      execute_with_telemetry(step, ctx, timeout)
+    end
+
+    if is_list(observe_opts) and observe_opts != [] do
+      {{step_result, telemetry_data}, observations} = Observer.capture(observe_opts, run_fn)
+      {step_result, telemetry_data, observations}
+    else
+      {step_result, telemetry_data} = run_fn.()
+      {step_result, telemetry_data, Observer.empty_result()}
+    end
+  end
+
   defp execute_with_telemetry(%{telemetry: prefixes} = step, ctx, timeout)
        when is_list(prefixes) and prefixes != [] do
     TelemetryCollector.capture(prefixes, fn ->
@@ -174,6 +196,24 @@ defmodule ScryJourney.RunnerV2 do
   defp execute_with_telemetry(step, ctx, timeout) do
     {Step.execute(step, ctx, timeout_ms: timeout), TelemetryCollector.empty_result()}
   end
+
+  defp maybe_merge_telemetry(result, telemetry_data) when telemetry_data.count > 0 do
+    case result do
+      r when is_map(r) -> Map.put(r, :telemetry, telemetry_data)
+      _ -> %{result: result, telemetry: telemetry_data}
+    end
+  end
+
+  defp maybe_merge_telemetry(result, _), do: result
+
+  defp maybe_merge_observations(result, observations) when map_size(observations) > 0 do
+    case result do
+      r when is_map(r) -> Map.put(r, :observed, observations)
+      _ -> %{result: result, observed: observations}
+    end
+  end
+
+  defp maybe_merge_observations(result, _), do: result
 
   defp run_await(%{await: condition}, ctx, journey_id, emit) when is_tuple(condition) do
     step_id = "await"
