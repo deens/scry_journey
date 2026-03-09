@@ -148,7 +148,7 @@ defmodule ScryJourney.Observer do
     |> Map.put(:pubsub_topic, topic)
   end
 
-  # Prism: snapshot after and compute diff
+  # Prism: snapshot after and compute diff, with journey-aware enrichment
   defp collect_prism(obs, true, pre) when is_map(pre) do
     if Code.ensure_loaded?(Prism) and function_exported?(Prism, :snapshot, 0) do
       snapshot = apply(Prism, :snapshot, [])
@@ -174,6 +174,9 @@ defmodule ScryJourney.Observer do
           _ -> prism_obs
         end
 
+      # Enrich with journey-specific graph data for new journey nodes
+      prism_obs = enrich_with_journey_data(prism_obs, snapshot, new_node_ids)
+
       Map.put(obs, :prism, prism_obs)
     else
       obs
@@ -196,6 +199,49 @@ defmodule ScryJourney.Observer do
   end
 
   defp collect_processes(obs, _, _), do: obs
+
+  # ──────────────────────────────────────────────
+  # Journey graph enrichment
+  # ──────────────────────────────────────────────
+
+  # Detect journey nodes among newly added nodes and attach summaries
+  defp enrich_with_journey_data(prism_obs, snapshot, new_node_ids) do
+    alias ScryJourney.PrismQuery
+
+    # Find journey IDs from new nodes with "journey:" prefix
+    journey_ids =
+      new_node_ids
+      |> MapSet.to_list()
+      |> Enum.filter(&String.starts_with?(&1, "journey:"))
+      |> Enum.map(&extract_journey_id/1)
+      |> Enum.uniq()
+      |> Enum.reject(&is_nil/1)
+
+    case journey_ids do
+      [] ->
+        prism_obs
+
+      ids ->
+        journeys =
+          Map.new(ids, fn id ->
+            {id, PrismQuery.journey_summary(snapshot, id)}
+          end)
+          |> Enum.reject(fn {_, v} -> is_nil(v) end)
+          |> Map.new()
+
+        Map.put(prism_obs, :journeys, journeys)
+    end
+  end
+
+  # Extract the base journey_id from a node_id like "journey:match_lifecycle:step1"
+  defp extract_journey_id("journey:" <> rest) do
+    case String.split(rest, ":", parts: 2) do
+      [id | _] -> id
+      _ -> nil
+    end
+  end
+
+  defp extract_journey_id(_), do: nil
 
   # ──────────────────────────────────────────────
   # Helpers
