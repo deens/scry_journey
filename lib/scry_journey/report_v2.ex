@@ -20,7 +20,7 @@ defmodule ScryJourney.ReportV2 do
 
     all_pass = fail_steps == 0 and error_steps == 0
 
-    %{
+    report = %{
       id: script[:id],
       name: script[:name],
       schema_version: @schema_version,
@@ -32,6 +32,12 @@ defmodule ScryJourney.ReportV2 do
       check_counts: %{pass: check_pass, fail: check_fail},
       teardown: Map.get(meta, :teardown, %{status: "OK"})
     }
+
+    # Include graph summary when provided by runner
+    case Map.get(meta, :graph) do
+      nil -> report
+      graph -> Map.put(report, :graph, graph)
+    end
   end
 
   @doc "Build a step report for a successful step."

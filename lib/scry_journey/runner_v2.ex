@@ -93,9 +93,13 @@ defmodule ScryJourney.RunnerV2 do
     all_reports = step_reports ++ skipped_reports
     duration = System.monotonic_time(:millisecond) - start_time
 
+    # Capture Prism graph summary when available
+    graph = capture_graph_summary(journey_id)
+
     ReportV2.build(script, all_reports, %{
       duration_ms: duration,
-      teardown: teardown_result
+      teardown: teardown_result,
+      graph: graph
     })
   end
 
@@ -285,4 +289,27 @@ defmodule ScryJourney.RunnerV2 do
 
   defp clamp_timeout(ms) when is_integer(ms) and ms > 0, do: min(ms, @max_script_timeout)
   defp clamp_timeout(_), do: @default_script_timeout
+
+  # Capture Prism graph summary for this journey if Prism is available.
+  # Returns nil when Prism isn't loaded.
+  defp capture_graph_summary(journey_id) do
+    if Code.ensure_loaded?(Prism) and function_exported?(Prism, :snapshot, 0) do
+      snapshot = apply(Prism, :snapshot, [])
+
+      case ScryJourney.PrismQuery.journey_summary(snapshot, journey_id) do
+        nil ->
+          nil
+
+        summary ->
+          Map.take(summary, [
+            :status,
+            :step_count,
+            :steps_passed,
+            :steps_failed,
+            :edge_count,
+            :event_count
+          ])
+      end
+    end
+  end
 end
