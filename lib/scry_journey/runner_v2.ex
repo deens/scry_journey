@@ -3,10 +3,20 @@ defmodule ScryJourney.RunnerV2 do
   Multi-step journey execution engine.
 
   Orchestrates step execution with context threading, check evaluation,
-  teardown guarantee, and dual timeouts (per-step and per-script).
+  teardown guarantee, dual timeouts (per-step and per-script), and
+  structured event emission for visualization and recording.
+
+  ## Event Emission
+
+  Pass `emitter: fn` in opts to receive lifecycle events during execution.
+  See `ScryJourney.EventEmitter` for emitter constructors and event types.
+
+      emitter = ScryJourney.EventEmitter.collector()
+      report = ScryJourney.RunnerV2.run(script, emitter: emitter)
+      events = ScryJourney.EventEmitter.collect()
   """
 
-  alias ScryJourney.{Context, Step, Checkpoint, ReportV2}
+  alias ScryJourney.{Context, Step, Checkpoint, ReportV2, EventEmitter, TelemetryCollector}
 
   require Logger
 
@@ -19,28 +29,45 @@ defmodule ScryJourney.RunnerV2 do
   The script map must have a `:steps` key with a list of step maps.
   Each step is executed in order with context threading. On first
   failure, remaining steps are skipped. Teardown always runs.
+
+  ## Options
+
+  - `:emitter` — event emission function, see `ScryJourney.EventEmitter`
+  - `:default_step_timeout` — default per-step timeout in ms
   """
   @spec run(map(), keyword()) :: map()
   def run(script, opts \\ []) do
     script_timeout = clamp_timeout(script[:timeout_ms] || @default_script_timeout)
+    emit = Keyword.get(opts, :emitter, EventEmitter.noop())
+    journey_id = script[:id] || "journey_#{System.unique_integer([:positive])}"
+    opts = Keyword.put(opts, :journey_id, journey_id)
 
-    task = Task.async(fn -> execute_all(script, opts) end)
+    emit.(:journey_started, EventEmitter.journey_started(journey_id, script))
 
-    case Task.yield(task, script_timeout) || Task.shutdown(task) do
-      {:ok, report} ->
-        report
+    task = Task.async(fn -> execute_all(script, opts, emit) end)
 
-      nil ->
-        ReportV2.build_error(script, "Script timed out after #{script_timeout}ms")
-    end
+    report =
+      case Task.yield(task, script_timeout) || Task.shutdown(task) do
+        {:ok, report} ->
+          report
+
+        nil ->
+          ReportV2.build_error(script, "Script timed out after #{script_timeout}ms")
+      end
+
+    emit.(:journey_completed, EventEmitter.journey_completed(journey_id, report))
+    report
   end
 
   # -- Private --
 
-  defp execute_all(script, opts) do
+  defp execute_all(script, opts, emit) do
+    journey_id = Keyword.fetch!(opts, :journey_id)
     start_time = System.monotonic_time(:millisecond)
-    {final_ctx, step_reports} = execute_steps(script, opts)
+    {final_ctx, step_reports} = execute_steps(script, opts, emit)
     teardown_result = run_teardown(script, final_ctx)
+
+    emit.(:teardown_completed, EventEmitter.teardown_completed(journey_id, teardown_result))
 
     # Build skipped reports for any steps not reached
     executed_count = length(step_reports)
@@ -64,9 +91,9 @@ defmodule ScryJourney.RunnerV2 do
     })
   end
 
-  defp execute_steps(script, opts) do
+  defp execute_steps(script, opts, emit) do
     Enum.reduce_while(script.steps, {Context.new(), []}, fn step, {ctx, reports} ->
-      case execute_step(step, ctx, opts) do
+      case execute_step(step, ctx, opts, emit) do
         {:ok, new_ctx, report} ->
           if report.status == "PASS" do
             {:cont, {new_ctx, reports ++ [report]}}
@@ -80,19 +107,36 @@ defmodule ScryJourney.RunnerV2 do
     end)
   end
 
-  defp execute_step(step, ctx, opts) do
+  defp execute_step(step, ctx, opts, emit) do
+    journey_id = Keyword.fetch!(opts, :journey_id)
     start_time = System.monotonic_time(:millisecond)
     step_timeout = step[:timeout_ms] || opts[:default_step_timeout] || 5_000
 
-    case Step.execute(step, ctx, timeout_ms: step_timeout) do
+    emit.(:step_started, EventEmitter.step_started(journey_id, step))
+
+    # If step has telemetry prefixes, wrap execution in a telemetry collector
+    {step_result, telemetry_data} = execute_with_telemetry(step, ctx, step_timeout)
+
+    case step_result do
       {:ok, result} ->
-        new_ctx = Context.merge(ctx, result)
+        # Merge telemetry data into result if any events were captured
+        result_with_telemetry =
+          if telemetry_data.count > 0 do
+            case result do
+              r when is_map(r) -> Map.put(r, :telemetry, telemetry_data)
+              _ -> %{result: result, telemetry: telemetry_data}
+            end
+          else
+            result
+          end
+
+        new_ctx = Context.merge(ctx, result_with_telemetry)
 
         # Run await if present
-        await_result = run_await(step, new_ctx)
+        await_result = run_await(step, new_ctx, journey_id, emit)
 
         # Evaluate checks against the merged context
-        check_results = evaluate_checks(step, new_ctx)
+        check_results = evaluate_checks(step, new_ctx, journey_id, emit)
         duration = System.monotonic_time(:millisecond) - start_time
 
         report =
@@ -103,32 +147,59 @@ defmodule ScryJourney.RunnerV2 do
 
         case await_result do
           {:error, _} ->
-            # Await failure is a step failure
             failed_report = %{report | status: "FAIL", error: "Await condition timed out"}
+            emit.(:step_completed, EventEmitter.step_completed(journey_id, step, failed_report))
             {:error, failed_report}
 
           _ ->
+            emit.(:step_completed, EventEmitter.step_completed(journey_id, step, report))
             {:ok, new_ctx, report}
         end
 
       {:error, reason} ->
         duration = System.monotonic_time(:millisecond) - start_time
         report = ReportV2.build_step_error(step, reason, %{duration_ms: duration})
+        emit.(:step_completed, EventEmitter.step_completed(journey_id, step, report))
         {:error, report}
     end
   end
 
-  defp run_await(%{await: condition}, ctx) when is_tuple(condition) do
-    Step.await(condition, ctx)
+  defp execute_with_telemetry(%{telemetry: prefixes} = step, ctx, timeout)
+       when is_list(prefixes) and prefixes != [] do
+    TelemetryCollector.capture(prefixes, fn ->
+      Step.execute(step, ctx, timeout_ms: timeout)
+    end)
   end
 
-  defp run_await(_, _ctx), do: :no_await
-
-  defp evaluate_checks(%{checks: checks}, ctx) when is_list(checks) and checks != [] do
-    Enum.map(checks, &Checkpoint.evaluate(&1, ctx))
+  defp execute_with_telemetry(step, ctx, timeout) do
+    {Step.execute(step, ctx, timeout_ms: timeout), TelemetryCollector.empty_result()}
   end
 
-  defp evaluate_checks(_, _ctx), do: []
+  defp run_await(%{await: condition}, ctx, journey_id, emit) when is_tuple(condition) do
+    step_id = "await"
+    emit.(:await_started, EventEmitter.await_started(journey_id, %{id: step_id}, condition))
+    result = Step.await(condition, ctx)
+    emit.(:await_resolved, EventEmitter.await_resolved(journey_id, %{id: step_id}, result))
+    result
+  end
+
+  defp run_await(_, _ctx, _journey_id, _emit), do: :no_await
+
+  defp evaluate_checks(%{checks: checks}, ctx, journey_id, emit)
+       when is_list(checks) and checks != [] do
+    Enum.map(checks, fn check ->
+      result = Checkpoint.evaluate(check, ctx)
+
+      emit.(
+        :checkpoint_evaluated,
+        EventEmitter.checkpoint_evaluated(journey_id, %{id: check[:id]}, result)
+      )
+
+      result
+    end)
+  end
+
+  defp evaluate_checks(_, _ctx, _journey_id, _emit), do: []
 
   defp run_teardown(%{teardown: teardown}, ctx) when is_function(teardown, 1) do
     start_time = System.monotonic_time(:millisecond)

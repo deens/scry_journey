@@ -52,11 +52,21 @@ defmodule ScryJourney do
   @spec run_script(map(), keyword()) :: map()
   defdelegate run_script(script, opts \\ []), to: ScryJourney.RunnerV2, as: :run
 
-  @doc "Load and run a journey script in one call."
+  @doc """
+  Load and run a journey script in one call.
+
+  ## Options
+
+  - `:emitter` — event emission function (see `ScryJourney.EventEmitter`)
+  - `:record` — path to save recording ETF file (auto-creates emitter)
+  """
   @spec verify_script(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def verify_script(path, opts \\ []) do
     with {:ok, script} <- load_script(path) do
-      {:ok, run_script(script, opts)}
+      opts = maybe_add_recording_emitter(opts)
+      report = run_script(script, opts)
+      maybe_save_recording(opts)
+      {:ok, report}
     end
   end
 
@@ -64,7 +74,43 @@ defmodule ScryJourney do
   @spec run_inline(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run_inline(args, opts \\ []) do
     with {:ok, script} <- ScryJourney.Script.from_inline(args) do
-      {:ok, run_script(script, opts)}
+      opts = maybe_add_recording_emitter(opts)
+      report = run_script(script, opts)
+      maybe_save_recording(opts)
+      {:ok, report}
+    end
+  end
+
+  defp maybe_add_recording_emitter(opts) do
+    case Keyword.get(opts, :record) do
+      nil ->
+        opts
+
+      path when is_binary(path) ->
+        {rec_emitter, agent} = ScryJourney.Recording.emitter()
+        existing = Keyword.get(opts, :emitter)
+
+        emitter =
+          if existing do
+            ScryJourney.EventEmitter.combine([existing, rec_emitter])
+          else
+            rec_emitter
+          end
+
+        opts
+        |> Keyword.put(:emitter, emitter)
+        |> Keyword.put(:_recording_agent, agent)
+        |> Keyword.put(:_recording_path, path)
+    end
+  end
+
+  defp maybe_save_recording(opts) do
+    case {Keyword.get(opts, :_recording_agent), Keyword.get(opts, :_recording_path)} do
+      {agent, path} when is_pid(agent) and is_binary(path) ->
+        ScryJourney.Recording.save(agent, path)
+
+      _ ->
+        :ok
     end
   end
 
