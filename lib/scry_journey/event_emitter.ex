@@ -240,5 +240,61 @@ defmodule ScryJourney.EventEmitter do
     }
   end
 
+  # -- Mode event builders --
+
+  @doc false
+  def mode_started(journey_id, script, opts) do
+    %{
+      journey_id: journey_id,
+      name: script[:name],
+      step_count: length(script[:steps] || []),
+      interval_ms: Keyword.get(opts, :interval),
+      props_mode: Keyword.get(opts, :props_mode, :fixed),
+      timestamp_ms: now()
+    }
+  end
+
+  @doc false
+  def mode_tick(journey_id, report, run_stats) do
+    %{
+      journey_id: journey_id,
+      run: run_stats.run,
+      status: run_stats.status,
+      pass: report.pass,
+      duration_ms: report.duration_ms,
+      total_runs: run_stats.run,
+      total_passes: run_stats.passes,
+      total_failures: run_stats.failures,
+      pass_rate: safe_rate(run_stats.passes, run_stats.run),
+      regressions: run_stats.regressions,
+      recoveries: run_stats.recoveries,
+      props: run_stats[:props],
+      timestamp_ms: now()
+    }
+  end
+
+  @doc false
+  def mode_regression(journey_id, run_number, message) do
+    %{
+      journey_id: journey_id,
+      run: run_number,
+      message: message,
+      timestamp_ms: now()
+    }
+  end
+
+  @doc false
+  def mode_recovered(journey_id, run_number, message) do
+    %{
+      journey_id: journey_id,
+      run: run_number,
+      message: message,
+      timestamp_ms: now()
+    }
+  end
+
+  defp safe_rate(_n, 0), do: 0.0
+  defp safe_rate(n, total), do: Float.round(n / total, 3)
+
   defp now, do: System.monotonic_time(:millisecond)
 end

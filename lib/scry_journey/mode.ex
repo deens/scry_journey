@@ -32,7 +32,7 @@ defmodule ScryJourney.Mode do
 
   use GenServer
 
-  alias ScryJourney.{RunnerV2, Props}
+  alias ScryJourney.{EventEmitter, RunnerV2, Props}
 
   require Logger
 
@@ -146,6 +146,12 @@ defmodule ScryJourney.Mode do
         state
       end
 
+    # Tell Prism this journey is now continuously watched
+    emitter.(
+      :mode_started,
+      EventEmitter.mode_started(script[:id] || "unknown", script, opts)
+    )
+
     state =
       if run_immediately do
         send(self(), :tick)
@@ -230,8 +236,16 @@ defmodule ScryJourney.Mode do
     {regressions, recoveries} =
       detect_transitions(prev_status, new_status, state.regressions, state.recoveries)
 
-    # Emit mode events
-    emit_mode_events(state.emitter, state.script, report, run_number, prev_status, new_status)
+    # Emit mode events (pass state for enriched stats)
+    emit_mode_events(
+      state.emitter,
+      state.script,
+      report,
+      run_number,
+      prev_status,
+      new_status,
+      state
+    )
 
     # Update history
     history_entry = %{
@@ -284,33 +298,43 @@ defmodule ScryJourney.Mode do
     {regressions, recoveries}
   end
 
-  defp emit_mode_events(emit, script, report, run_number, prev_status, new_status) do
+  defp emit_mode_events(emit, script, report, run_number, prev_status, new_status, state) do
     journey_id = script[:id] || "unknown"
 
-    # Always emit tick
-    emit.(:mode_tick, %{
-      journey_id: journey_id,
+    run_stats = %{
       run: run_number,
       status: new_status,
-      duration_ms: report.duration_ms,
-      pass: report.pass
-    })
+      passes: state.passes + if(report.pass, do: 1, else: 0),
+      failures: state.failures + if(report.pass, do: 0, else: 1),
+      regressions: state.regressions,
+      recoveries: state.recoveries,
+      props: state.props
+    }
+
+    # Always emit tick with enriched stats
+    emit.(:mode_tick, EventEmitter.mode_tick(journey_id, report, run_stats))
 
     # Emit transitions
     case {prev_status, new_status} do
       {"PASS", "FAIL"} ->
-        emit.(:mode_regression, %{
-          journey_id: journey_id,
-          run: run_number,
-          message: "Regression detected: #{journey_id} went from PASS to FAIL"
-        })
+        emit.(
+          :mode_regression,
+          EventEmitter.mode_regression(
+            journey_id,
+            run_number,
+            "Regression detected: #{journey_id} went from PASS to FAIL"
+          )
+        )
 
       {"FAIL", "PASS"} ->
-        emit.(:mode_recovered, %{
-          journey_id: journey_id,
-          run: run_number,
-          message: "Recovery: #{journey_id} went from FAIL to PASS"
-        })
+        emit.(
+          :mode_recovered,
+          EventEmitter.mode_recovered(
+            journey_id,
+            run_number,
+            "Recovery: #{journey_id} went from FAIL to PASS"
+          )
+        )
 
       _ ->
         :ok

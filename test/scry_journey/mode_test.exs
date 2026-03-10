@@ -266,7 +266,7 @@ defmodule ScryJourney.ModeTest do
   # ──────────────────────────────────────────────
 
   describe "event emission" do
-    test "emits mode_tick on each run" do
+    test "emits mode_started on init" do
       test_pid = self()
 
       emitter = fn type, payload ->
@@ -281,14 +281,103 @@ defmodule ScryJourney.ModeTest do
           emitter: emitter
         )
 
-      # Wait for the journey + mode events
+      Process.sleep(50)
+
+      assert_received {:mode_event, :mode_started, payload}
+      assert payload.journey_id == "mode_pass"
+      assert payload.interval_ms == 60_000
+      assert payload.props_mode == :fixed
+      assert payload.step_count == 1
+      assert is_integer(payload.timestamp_ms)
+
+      Mode.stop(pid)
+    end
+
+    test "emits enriched mode_tick with run stats" do
+      test_pid = self()
+
+      emitter = fn type, payload ->
+        send(test_pid, {:mode_event, type, payload})
+        :ok
+      end
+
+      {:ok, pid} =
+        Mode.start_link(
+          script: passing_script(),
+          interval: 60_000,
+          emitter: emitter
+        )
+
       Process.sleep(100)
 
-      # Should have received mode_tick
       assert_received {:mode_event, :mode_tick, payload}
       assert payload.journey_id == "mode_pass"
       assert payload.status == "PASS"
       assert payload.run == 1
+      assert payload.total_runs == 1
+      assert payload.total_passes == 1
+      assert payload.total_failures == 0
+      assert payload.pass_rate == 1.0
+      assert payload.regressions == 0
+      assert payload.recoveries == 0
+      assert is_integer(payload.duration_ms)
+      assert is_integer(payload.timestamp_ms)
+
+      Mode.stop(pid)
+    end
+
+    test "emits mode_regression and mode_recovered on transitions" do
+      test_pid = self()
+      run_counter = :counters.new(1, [:atomics])
+
+      # First run passes, second fails, third passes again
+      script = %{
+        id: "transition_test",
+        steps: [
+          %{
+            id: "s1",
+            run: fn _ctx ->
+              :counters.add(run_counter, 1, 1)
+              run = :counters.get(run_counter, 1)
+              %{x: if(run == 2, do: 99, else: 1)}
+            end,
+            checks: [%{id: "c1", path: "x", assert: "equals", expected: 1}]
+          }
+        ]
+      }
+
+      emitter = fn type, payload ->
+        send(test_pid, {:mode_event, type, payload})
+        :ok
+      end
+
+      {:ok, pid} =
+        Mode.start_link(
+          script: script,
+          interval: 60_000,
+          emitter: emitter
+        )
+
+      Process.sleep(50)
+
+      # Run 1: PASS (no transition)
+      assert_received {:mode_event, :mode_tick, %{status: "PASS", run: 1}}
+
+      # Run 2: FAIL (regression)
+      Mode.run_now(pid)
+      Process.sleep(50)
+
+      assert_received {:mode_event, :mode_tick, %{status: "FAIL", run: 2}}
+      assert_received {:mode_event, :mode_regression, %{run: 2, message: msg}}
+      assert msg =~ "Regression"
+
+      # Run 3: PASS again (recovery)
+      Mode.run_now(pid)
+      Process.sleep(50)
+
+      assert_received {:mode_event, :mode_tick, %{status: "PASS", run: 3}}
+      assert_received {:mode_event, :mode_recovered, %{run: 3, message: msg}}
+      assert msg =~ "Recovery"
 
       Mode.stop(pid)
     end
