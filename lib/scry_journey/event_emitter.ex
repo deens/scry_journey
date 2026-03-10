@@ -190,10 +190,13 @@ defmodule ScryJourney.EventEmitter do
 
   @doc false
   def await_started(journey_id, step, condition) do
+    await_id = inspect(condition, limit: 50)
+
     %{
       journey_id: journey_id,
       step_id: step[:id],
-      condition: inspect(condition, limit: 50),
+      await_id: await_id,
+      condition: await_id,
       timestamp_ms: now()
     }
   end
@@ -210,6 +213,7 @@ defmodule ScryJourney.EventEmitter do
     %{
       journey_id: journey_id,
       step_id: step[:id],
+      await_id: step[:id],
       status: status,
       detail: detail,
       timestamp_ms: now()

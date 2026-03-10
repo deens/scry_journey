@@ -241,11 +241,10 @@ defmodule ScryJourney.RunnerV2 do
 
   defp maybe_merge_observations(result, _), do: result
 
-  defp run_await(%{await: condition}, ctx, journey_id, emit) when is_tuple(condition) do
-    step_id = "await"
-    emit.(:await_started, EventEmitter.await_started(journey_id, %{id: step_id}, condition))
+  defp run_await(%{await: condition} = step, ctx, journey_id, emit) when is_tuple(condition) do
+    emit.(:await_started, EventEmitter.await_started(journey_id, step, condition))
     result = Step.await(condition, ctx)
-    emit.(:await_resolved, EventEmitter.await_resolved(journey_id, %{id: step_id}, result))
+    emit.(:await_resolved, EventEmitter.await_resolved(journey_id, step, result))
     result
   end
 
