@@ -32,13 +32,21 @@ defmodule ScryJourney.MixProject do
   end
 
   # Optional dependency on Scry for remote execution transport.
-  # Use SCRY_PATH=../scry for local development.
+  # Resolves via:
+  #   1. SCRY_PATH env var (explicit override)
+  #   2. Sibling `../scry` directory (workspace/ecosystem layout)
+  #   3. Hex package (standalone installs)
   # Without Scry, journeys run locally via apply/3.
   defp scry_dep do
-    if path = System.get_env("SCRY_PATH") do
-      {:scry, path: path, optional: true}
-    else
-      {:scry, "~> 0.4.0", optional: true}
+    cond do
+      path = System.get_env("SCRY_PATH") ->
+        {:scry, path: path, optional: true}
+
+      File.dir?(Path.expand("../scry", __DIR__)) ->
+        {:scry, path: "../scry", optional: true}
+
+      true ->
+        {:scry, "~> 0.4.0", optional: true}
     end
   end
 
